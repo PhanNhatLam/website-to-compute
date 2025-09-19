@@ -1,56 +1,239 @@
 <!DOCTYPE html>
-<html lang="en">
-
+<html lang="vi">
 <head>
-  <!-- 
-      This is an HTML comment
-      You can write text in a comment and the content won't be visible in the page
-    -->
-
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="icon" href="https://glitch.com/favicon.ico" />
-
-  <!--
-      This is the page head - it contains info the browser uses
-      Like the title, which appears on the browser tab but not inside the page
-      Further down you'll see the content that displays in the page
-    -->
-  <title>Hello World!</title>
-
-  <!-- The website stylesheet -->
-  <link rel="stylesheet" href="/style.css" />
-
-  <!-- The website JavaScript file -->
-  <script src="/script.js" defer></script>
+  <meta charset="utf-8"/>
+  <title>ORS + Leaflet — Nhân viên → Điểm Ca</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <style>
+    html,body { height:100%; }
+    #map { height: 60vh; min-height: 420px; }
+    .small { font-size: 0.85rem; color: #555; }
+  </style>
 </head>
+<body class="bg-gray-50 text-gray-800">
+  <div class="max-w-6xl mx-auto p-4">
+    <h1 class="text-2xl font-bold text-center text-blue-600 mb-4">ORS + Leaflet — Khoảng cách nhân viên → Điểm Ca</h1>
 
-<body>
-  <!--
-      The body includes the content you see in the page
-      Each element is defined using tags, like this <div></div>
-      The attributes like class="wrapper" let us style elements in the CSS
-    -->
-  <div class="wrapper">
-    <div class="content" role="main">
-      <h1 class="title">Oh hi website!</h1>
-      <img src="/cool-website.svg" class="illustration" alt="cool website" />
-      <div class="instructions">
-        <p>
-          Fork <a href="https://github.com/glitchdotcom/website-to-compute">this project</a> and open it in a GitHub Codespace.
-        </p>
-        <p> Follow the steps in the README to deploy your new website to Fastly in a few steps!
-        </p>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <!-- Left Panel -->
+      <div class="col-span-1 bg-white rounded-xl shadow p-4 space-y-3">
+        <div>
+          <label class="font-semibold">🔑 ORS API Key</label>
+          <input id="orsKey" type="text" placeholder="Dán API key ORS tại đây" class="w-full border rounded p-2 mt-2"/>
+        </div>
 
+        <div>
+          <label class="font-semibold">📂 Upload CSV nhân viên</label>
+          <input id="csvFile" type="file" accept=".csv" class="w-full mt-2"/>
+          <div class="small mt-1">CSV format: id,code,name,phone,lat,lng,vehicle (hoặc có address thay lat/lng).</div>
+          <button id="downloadSample" class="mt-2 bg-gray-800 text-white px-3 py-2 rounded">Tải sample CSV</button>
+        </div>
+
+        <div>
+          <label class="font-semibold">📍 Địa điểm Ca (A)</label>
+          <input id="caInput" type="text" placeholder="Địa chỉ hoặc lat,lng" class="w-full border rounded p-2 mt-2"/>
+          <div class="flex gap-2 mt-2">
+            <button id="setCaBtn" class="bg-blue-600 text-white px-3 py-2 rounded">Đặt Ca</button>
+            <button id="clearCaBtn" class="bg-gray-300 px-3 py-2 rounded">Xóa Ca</button>
+          </div>
+          <div class="small mt-2">Có thể click trực tiếp bản đồ để đặt Ca.</div>
+        </div>
+
+        <div>
+          <label class="font-semibold">▶ Hành động</label>
+          <div class="flex gap-2 mt-2">
+            <button id="computeAll" class="bg-green-600 text-white px-3 py-2 rounded">Tính tất cả</button>
+            <button id="exportCsv" class="bg-gray-700 text-white px-3 py-2 rounded">Xuất CSV</button>
+          </div>
+        </div>
+
+        <div id="progress" class="small mt-2 text-gray-700">Trạng thái: chờ thao tác</div>
       </div>
 
-      <footer class="footer">
-        <div>
-          <a class="remix" href="https://github.com/glitchdotcom/website-to-compute">🚧 Get your own site</a>
+      <!-- Map + Results -->
+      <div class="col-span-2 bg-white rounded-xl shadow p-2">
+        <div id="map" class="rounded"></div>
+        <div class="flex gap-2 mt-3">
+          <div class="flex-1">
+            <label class="font-semibold">Kết quả / Danh sách</label>
+            <div id="results" class="mt-2 max-h-56 overflow-auto text-sm"></div>
+          </div>
+          <div style="width:180px;">
+            <label class="font-semibold">Chú thích</label>
+            <div class="mt-2 small">
+              <div>🔵 Nhân viên</div>
+              <div>📍 Điểm Ca</div>
+            </div>
+          </div>
         </div>
-      </footer>
+      </div>
     </div>
   </div>
-</body>
 
+  <!-- libs -->
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+
+  <script>
+  const map = L.map('map').setView([10.7769, 106.7009], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+  let employees = [], markers = [], caMarker = null;
+  let routesLayer = L.layerGroup().addTo(map);
+  const resultsEl = document.getElementById('results');
+  const progressEl = document.getElementById('progress');
+  const empIcon = L.icon({ iconUrl: 'https://cdn-icons-png.flaticon.com/512/1946/1946429.png', iconSize:[28,28] });
+  const caIcon  = L.icon({ iconUrl: 'https://cdn-icons-png.flaticon.com/512/684/684908.png', iconSize:[32,32] });
+
+  function q(id){ return document.getElementById(id); }
+  function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+  function validLatLng(v){ return !isNaN(v) && v > -90 && v < 90; }
+
+  // Sample CSV
+  q('downloadSample').addEventListener('click', ()=>{
+    const sample = `id,code,name,phone,lat,lng,vehicle
+1,WC-2478,"Nguyễn Trường Bội Linh",0796809056,10.787587,106.652336,"xe máy"
+2,WC-1234,"Nguyễn Văn A",0909123456,10.876160,106.809790,"xe máy"`;
+    const blob = new Blob([sample], {type:'text/csv'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'employees_sample.csv'; a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  // Load CSV
+  q('csvFile').addEventListener('change', (ev)=>{
+    const f = ev.target.files[0];
+    if(!f) return;
+    Papa.parse(f, {
+      header: true,
+      skipEmptyLines: true,
+      complete: function(res){
+        loadEmployees(res.data);
+      }
+    });
+  });
+
+  function loadEmployees(arr){
+    employees = [];
+    markers.forEach(m=>map.removeLayer(m));
+    markers = [];
+    routesLayer.clearLayers();
+    resultsEl.innerHTML = '';
+
+    arr.forEach((r,i)=>{
+      const lat = parseFloat(r.lat), lng = parseFloat(r.lng);
+      const emp = { id: r.id || i+1, code: r.code, name: r.name, phone: r.phone, vehicle: r.vehicle,
+        lat: isNaN(lat)?null:lat, lng: isNaN(lng)?null:lng, dist_km:null, dur_min:null, route:null };
+      employees.push(emp);
+    });
+
+    employees.forEach(emp=>{
+      if(emp.lat && emp.lng){
+        const m = L.marker([emp.lat, emp.lng], {icon: empIcon}).addTo(map);
+        m.bindPopup(`<b>${emp.name}</b><br>${emp.code}`);
+        m.empId = emp.id;
+        markers.push(m);
+      }
+    });
+
+    if(markers.length) map.fitBounds(L.featureGroup(markers).getBounds().pad(0.2));
+    renderResults();
+  }
+
+  // Geocode + Directions
+  async function geocodeORS(addr, key){
+    const url = `https://api.openrouteservice.org/geocode/search?api_key=${key}&text=${encodeURIComponent(addr)}&size=1`;
+    const resp = await fetch(url); const d = await resp.json();
+    if(!d.features.length) throw new Error("Không tìm thấy địa chỉ");
+    const c = d.features[0].geometry.coordinates; return [c[1],c[0]];
+  }
+
+  async function directionsORS(start, end, key){
+    const url = `https://api.openrouteservice.org/v2/directions/driving-car?api_key=${key}&start=${start[1]},${start[0]}&end=${end[1]},${end[0]}`;
+    const resp = await fetch(url); const d = await resp.json();
+    const s = d.features[0].properties.summary;
+    return { dist: s.distance/1000, dur: Math.round(s.duration/60), coords: d.features[0].geometry.coordinates };
+  }
+
+  // Đặt Ca
+  map.on('click', e=>{
+    setCa([e.latlng.lat,e.latlng.lng]);
+    q('caInput').value = e.latlng.lat.toFixed(6)+","+e.latlng.lng.toFixed(6);
+  });
+
+  q('setCaBtn').addEventListener('click', async ()=>{
+    const v = q('caInput').value.trim(); const key = q('orsKey').value.trim();
+    if(!v) return;
+    if(v.includes(',')){
+      const [lat,lng] = v.split(',').map(x=>parseFloat(x.trim()));
+      if(validLatLng(lat) && !isNaN(lng)) setCa([lat,lng]); else if(key) setCa(await geocodeORS(v,key));
+    } else if(key) setCa(await geocodeORS(v,key));
+  });
+
+  q('clearCaBtn').addEventListener('click', ()=>{
+    if(caMarker) map.removeLayer(caMarker); caMarker=null;
+  });
+
+  function setCa(latlng){
+    if(caMarker) map.removeLayer(caMarker);
+    caMarker = L.marker(latlng,{icon:caIcon,draggable:true}).addTo(map).bindPopup("📍 Điểm Ca").openPopup();
+    caMarker.on('dragend',()=>{ const p=caMarker.getLatLng(); q('caInput').value=p.lat+","+p.lng; });
+    map.setView(latlng,14);
+  }
+
+  // Tính
+  async function computeEmp(emp){
+    if(!caMarker) return alert("Chưa đặt Ca");
+    const key = q('orsKey').value.trim(); if(!key) return alert("Nhập ORS key");
+    const ca = [caMarker.getLatLng().lat, caMarker.getLatLng().lng];
+    const d = await directionsORS([emp.lat,emp.lng], ca, key);
+    emp.dist_km=d.dist; emp.dur_min=d.dur; emp.route=d.coords;
+    renderResults();
+  }
+
+  // Show route
+  function showRoute(emp){
+    routesLayer.clearLayers();
+    const latlngs = emp.route.map(c=>[c[1],c[0]]);
+    const pl=L.polyline(latlngs,{color:"blue",weight:4}).addTo(routesLayer);
+    map.fitBounds(pl.getBounds().pad(0.2));
+  }
+  function clearRoute(){ routesLayer.clearLayers(); }
+
+  // Render list
+  function renderResults(){
+    resultsEl.innerHTML='';
+    employees.forEach(emp=>{
+      const div=document.createElement('div');
+      div.className="p-2 border-b";
+      div.innerHTML=`
+        <div class="font-semibold">${emp.name} <span class="text-sm text-gray-500">(${emp.code})</span></div>
+        <div class="text-sm text-gray-700">${emp.dist_km?`<b>${emp.dist_km.toFixed(2)} km</b>, ${emp.dur_min} phút`:"Chưa tính"}</div>
+        <div class="mt-2 flex gap-2">
+          <button class="px-2 py-1 bg-blue-500 text-white rounded" onclick="zoomEmp('${emp.id}')">Zoom</button>
+          <button class="px-2 py-1 bg-green-600 text-white rounded" onclick="calcEmp('${emp.id}')">Tính</button>
+          ${emp.route?`<button class="px-2 py-1 bg-indigo-600 text-white rounded" onclick="showEmp('${emp.id}')">Đường</button>
+          <button class="px-2 py-1 bg-red-500 text-white rounded" onclick="clearRoute()">Xoá đường</button>`:""}
+        </div>`;
+      resultsEl.appendChild(div);
+    });
+  }
+
+  window.zoomEmp=id=>{const e=employees.find(x=>x.id==id);if(e) map.setView([e.lat,e.lng],14);};
+  window.calcEmp=id=>{const e=employees.find(x=>x.id==id);if(e) computeEmp(e);};
+  window.showEmp=id=>{const e=employees.find(x=>x.id==id);if(e&&e.route) showRoute(e);};
+
+  q('computeAll').addEventListener('click', async ()=>{
+    for(let i=0;i<employees.length;i++){ await computeEmp(employees[i]); await sleep(300); }
+  });
+
+  q('exportCsv').addEventListener('click', ()=>{
+    const rows=["id,code,name,phone,vehicle,lat,lng,distance_km,duration_min"];
+    employees.forEach(e=>rows.push([e.id,e.code,e.name,e.phone,e.vehicle,e.lat,e.lng,e.dist_km||"",e.dur_min||""].join(",")));
+    const blob=new Blob([rows.join("\n")],{type:"text/csv"}); const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob); a.download="results.csv"; a.click(); URL.revokeObjectURL(a.href);
+  });
+  </script>
+</body>
 </html>
